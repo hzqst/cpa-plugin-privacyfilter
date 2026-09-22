@@ -119,24 +119,32 @@ plugins:
         - gpt-4
       skip_formats:
         - openai
+      skip_pii_types:
+        - email
 ```
 
 Plugin fields:
 
-| Field           | Type   | Default | Description                                                                            |
-|-----------------|--------|---------|----------------------------------------------------------------------------------------|
-| `gitleaks_toml` | string | `""`    | Custom gitleaks rule file path. Relative paths are resolved from the plugin directory. |
-| `skip_models`   | array  | `[]`    | Models that should skip redaction.                                                     |
-| `skip_formats`  | array  | `[]`    | Source formats that should skip redaction.                                             |
+| Field            | Type   | Default | Description                                                                             |
+|------------------|--------|---------|-----------------------------------------------------------------------------------------|
+| `gitleaks_toml`  | string | `""`    | Custom gitleaks rule file path. Relative paths are resolved from the plugin directory.  |
+| `skip_models`    | array  | `[]`    | Models that should skip redaction.                                                      |
+| `skip_formats`   | array  | `[]`    | Source formats that should skip redaction.                                              |
+| `skip_pii_types` | array  | `[]`    | Structured PII detectors to disable: `email`, `phone`, `id_card`, `ip`, `bank_card`.    |
 
 When `gitleaks_toml` is empty and no `rules/gitleaks.toml` sidecar file exists,
 the plugin uses the rules embedded in the binary at build time.
+
+`skip_pii_types` disables individual structured PII detectors while leaving secrets
+detection untouched. Accepted values are `email`, `phone`, `id_card`, `ip`, and
+`bank_card`; unknown values are ignored with a warning. A gitleaks rule file cannot
+influence this layer, so `skip_pii_types` is the only way to keep a PII category intact.
 
 ## How It Works
 
 The plugin runs for both before-auth and after-auth request interception hooks, then parses the JSON body:
 
-1. Checks `skip_models` and `skip_formats`.
+1. Checks `skip_models` and `skip_formats`, and skips the detectors listed in `skip_pii_types`.
 2. Parses the request body as JSON.
 3. Handles `messages` first, then falls back to `input`.
 4. Edits text fields only.

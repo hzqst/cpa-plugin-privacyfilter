@@ -19,6 +19,7 @@ type privacyFilterConfig struct {
 	GitleaksTOML string   `yaml:"gitleaks_toml"`
 	SkipModels   []string `yaml:"skip_models"`
 	SkipFormats  []string `yaml:"skip_formats"`
+	SkipPIITypes []string `yaml:"skip_pii_types"`
 }
 
 func defaultConfig() privacyFilterConfig {
@@ -94,11 +95,29 @@ func newFilter(pluginDir string, cfg privacyFilterConfig) (*filter.Filter, error
 		tomlPath = tmpPath
 	}
 
-	f, err := filter.New(tomlPath)
+	f, err := filter.NewWithOptions(tomlPath, filter.Options{DisabledPII: cfg.SkipPIITypes})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create privacy filter: %w", err)
+	}
+	if unknown := unknownPIITypes(cfg.SkipPIITypes); len(unknown) > 0 {
+		log.Warnf("privacy filter: unknown skip_pii_types entries ignored: %v (supported: %v)", unknown, filter.PIITypes)
+	}
+	if len(cfg.SkipPIITypes) > 0 {
+		log.Infof("privacy filter: disabled PII detectors: %v", cfg.SkipPIITypes)
 	}
 	rules, skipped := f.Stats()
 	log.Infof("privacy filter loaded: %d rules, %d skipped", rules, skipped)
 	return f, nil
+}
+
+// unknownPIITypes returns the configured PII type identifiers that the filter
+// does not support, so typos surface in the log instead of failing silently.
+func unknownPIITypes(types []string) []string {
+	var unknown []string
+	for _, t := range types {
+		if trimmed := strings.TrimSpace(t); trimmed != "" && !filter.IsKnownPIIType(trimmed) {
+			unknown = append(unknown, trimmed)
+		}
+	}
+	return unknown
 }

@@ -231,3 +231,47 @@ func TestRegistrationCapabilityJSON(t *testing.T) {
 		t.Fatalf("expected request_interceptor in JSON: %s", string(raw))
 	}
 }
+
+func TestConfigParseSkipPIITypes(t *testing.T) {
+	cfg, err := parseConfig([]byte("skip_pii_types:\n  - email\n  - phone\n"))
+	if err != nil {
+		t.Fatalf("parseConfig() error = %v", err)
+	}
+	if len(cfg.SkipPIITypes) != 2 || cfg.SkipPIITypes[0] != "email" || cfg.SkipPIITypes[1] != "phone" {
+		t.Fatalf("skip_pii_types = %v, want [email phone]", cfg.SkipPIITypes)
+	}
+}
+
+func TestUnknownPIITypesReported(t *testing.T) {
+	got := unknownPIITypes([]string{"email", "emails", "  ", "IP"})
+	if len(got) != 1 || got[0] != "emails" {
+		t.Fatalf("unknownPIITypes() = %v, want [emails]", got)
+	}
+}
+
+// skip_pii_types must reach the filter: with email disabled the address passes
+// through untouched while the other detectors keep working.
+func TestNewFilterSkipPIITypesDisablesEmail(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.SkipPIITypes = []string{"email"}
+	f, err := newFilter(t.TempDir(), cfg)
+	if err != nil {
+		t.Fatalf("newFilter() error = %v", err)
+	}
+	p := &privacyFilterPlugin{cfg: cfg, filter: f}
+
+	body := `{"model":"gpt-4","messages":[{"role":"user","content":"mail test@example.com phone 13800138000"}]}`
+	modified, err := p.redactRequestBody([]byte(body))
+	if err != nil {
+		t.Fatalf("redactRequestBody() error = %v", err)
+	}
+	if modified == nil {
+		t.Fatal("expected modified body (phone redacted), got nil")
+	}
+	if !strings.Contains(string(modified), "test@example.com") {
+		t.Fatalf("email must survive when its detector is disabled: %s", string(modified))
+	}
+	if strings.Contains(string(modified), "13800138000") {
+		t.Fatalf("phone must still be redacted: %s", string(modified))
+	}
+}

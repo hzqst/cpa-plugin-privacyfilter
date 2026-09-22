@@ -4,7 +4,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-var pluginVersion = "0.2.0"
+var pluginVersion = "0.3.0"
 
 func buildPlugin(configYAML []byte, pluginDir string) (pluginapi.Plugin, error) {
 	cfg, errParse := parseConfig(configYAML)
@@ -47,6 +47,11 @@ func buildPlugin(configYAML []byte, pluginDir string) (pluginapi.Plugin, error) 
 					Name:        "skip_formats",
 					Type:        pluginapi.ConfigFieldTypeArray,
 					Description: "Source format names to skip redaction for.",
+				},
+				{
+					Name:        "skip_pii_types",
+					Type:        pluginapi.ConfigFieldTypeArray,
+					Description: "Structured PII detectors to disable: email, phone, id_card, ip, bank_card.",
 				},
 			},
 		},

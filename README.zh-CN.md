@@ -114,6 +114,8 @@ plugins:
         - gpt-4
       skip_formats:
         - openai
+      skip_pii_types:
+        - email
 ```
 
 插件字段说明：
@@ -123,14 +125,17 @@ plugins:
 | `gitleaks_toml` | string | `""` | 自定义 gitleaks 规则文件路径，支持相对插件目录路径 |
 | `skip_models`   | array  | `[]` | 命中的模型不做脱敏                      |
 | `skip_formats`  | array  | `[]` | 命中的来源格式不做脱敏                    |
+| `skip_pii_types` | array | `[]` | 关闭指定结构化 PII 检测器，可选 `email` / `phone` / `id_card` / `ip` / `bank_card` |
 
 当 `gitleaks_toml` 为空、且共享库旁不存在 `rules/gitleaks.toml` 时，插件使用构建时内嵌到二进制中的规则。
+
+`skip_pii_types` 单独关闭某个结构化 PII 检测器，不影响密钥层。可选值：`email`、`phone`、`id_card`、`ip`、`bank_card`；无法识别的取值会被忽略并打警告。gitleaks 规则文件管不到这一层，所以这是保留某类 PII 的唯一办法。
 
 ## 工作方式
 
 插件会在 before-auth 和 after-auth 请求拦截阶段运行，然后解析 JSON 请求体：
 
-1. 检查 `skip_models` 和 `skip_formats`。
+1. 检查 `skip_models` 和 `skip_formats`，并跳过 `skip_pii_types` 里列出的检测器。
 2. 将请求体解析为 JSON。
 3. 优先处理 `messages`，没有时处理 `input`。
 4. 只修改文本字段。
