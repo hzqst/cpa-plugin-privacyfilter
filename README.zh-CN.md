@@ -189,6 +189,13 @@ gitleaks_toml: custom/gitleaks.toml
 
 相对路径会基于插件目录解析。
 
+规则文件里的 allowlist（豁免）会按 gitleaks 的语义生效：顶层 `[allowlist]` 与每个
+`[[rules.allowlists]]` 条目，支持 `regexTarget`（`secret` / `match` / `line`）、
+`stopwords` 与 `condition`。因此被某条规则豁免的行不再脱敏 —— 例如
+`Co-Authored-By:` 这类署名行，内建的 `generic-api-key` 规则用 allowlist 里的
+`author` 模式把它挡掉了。`paths` 与 `commits` 依赖文件名 / commit 上下文，本插件没有，
+行为等同于 gitleaks 无路径时的取值：永不命中（只在 `condition = "AND"` 时影响结果）。
+
 ## 开发
 
 常用命令：

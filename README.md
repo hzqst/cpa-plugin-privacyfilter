@@ -201,6 +201,15 @@ gitleaks_toml: custom/gitleaks.toml
 
 Relative paths are resolved from the plugin directory.
 
+Allowlists declared in the rule file are honored, matching gitleaks semantics:
+the top-level `[allowlist]` and every `[[rules.allowlists]]` entry, with
+`regexTarget` (`secret` / `match` / `line`), `stopwords` and `condition`. So a
+line that a rule's allowlist excludes — e.g. `Co-Authored-By:` trailers, which the
+built-in `generic-api-key` allowlist exempts via its `author` pattern — is left
+untouched. `paths` and `commits` criteria need file/commit context, which does not
+exist here: like gitleaks with no path, they never match (they only matter under
+`condition = "AND"`).
+
 ## Development
 
 Common commands:
