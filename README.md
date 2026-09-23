@@ -157,7 +157,7 @@ listing a client-side alias still works.
 Redaction itself runs in the **after-auth** interception stage, because the upstream
 model is unknown before credential selection. The before-auth stage passes requests
 through unchanged — redacting there would rewrite the body before the skip decision
-could be made.
+could be made. Requests that are skipped are logged at debug level only.
 
 ## How It Works
 

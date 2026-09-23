@@ -40,7 +40,8 @@ func (p *privacyFilterPlugin) interceptRequest(req pluginapi.RequestInterceptReq
 	resp := pluginapi.RequestInterceptResponse{}
 
 	if p.cfg.shouldSkip(req.Model, req.RequestedModel, req.SourceFormat) {
-		log.Infof("privacy filter: skipped redaction (upstream model=%q requested model=%q format=%q)",
+		// Debug：被跳过的请求（如整条 deepseek 路由）通常是常态，不该占 Info 日志。
+		log.Debugf("privacy filter: skipped redaction (upstream model=%q requested model=%q format=%q)",
 			req.Model, req.RequestedModel, req.SourceFormat)
 		return resp, nil
 	}
