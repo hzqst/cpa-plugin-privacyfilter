@@ -116,11 +116,12 @@ plugins:
       enabled: true
       gitleaks_toml: ""        # Empty uses embedded rules (or rules/gitleaks.toml sidecar)
       skip_models:
-        - gpt-4
+        - deepseek-*
       skip_formats:
         - openai
       skip_pii_types:
         - email
+      log_entities: false      # Log the original text of each redacted entity
 ```
 
 Plugin fields:
@@ -128,9 +129,10 @@ Plugin fields:
 | Field            | Type   | Default | Description                                                                             |
 |------------------|--------|---------|-----------------------------------------------------------------------------------------|
 | `gitleaks_toml`  | string | `""`    | Custom gitleaks rule file path. Relative paths are resolved from the plugin directory.  |
-| `skip_models`    | array  | `[]`    | Models that should skip redaction.                                                      |
+| `skip_models`    | array  | `[]`    | Upstream models that should skip redaction. `*` wildcard supported.                     |
 | `skip_formats`   | array  | `[]`    | Source formats that should skip redaction.                                              |
 | `skip_pii_types` | array  | `[]`    | Structured PII detectors to disable: `email`, `phone`, `id_card`, `ip`, `bank_card`.    |
+| `log_entities`   | bool   | `false` | Log the original text of every redacted entity. Debug aid — see the warning below.       |
 
 When `gitleaks_toml` is empty and no `rules/gitleaks.toml` sidecar file exists,
 the plugin uses the rules embedded in the binary at build time.
@@ -139,6 +141,23 @@ the plugin uses the rules embedded in the binary at build time.
 detection untouched. Accepted values are `email`, `phone`, `id_card`, `ip`, and
 `bank_card`; unknown values are ignored with a warning. A gitleaks rule file cannot
 influence this layer, so `skip_pii_types` is the only way to keep a PII category intact.
+
+`log_entities` writes one log line per redacted entity (`type=… text="…"`) so you can
+tell what the filter caught. CPA logs are normally persisted (docker's `json-file`
+driver, request logs), so enabling it puts the exact secrets this plugin is meant to
+remove on disk. Enable it temporarily to debug false positives, then turn it off.
+
+`skip_models` matches the **upstream** model — the name the request is routed to after
+credential selection. A client alias is therefore matched by the model it resolves to:
+`skip_models: ["deepseek-*"]` skips every request routed to a DeepSeek model, even when
+the client asked for `claude-sonnet-5`. `*` is the only wildcard; a pattern without it
+must match the name exactly (case-insensitive). `RequestedModel` is matched too, so
+listing a client-side alias still works.
+
+Redaction itself runs in the **after-auth** interception stage, because the upstream
+model is unknown before credential selection. The before-auth stage passes requests
+through unchanged — redacting there would rewrite the body before the skip decision
+could be made.
 
 ## How It Works
 

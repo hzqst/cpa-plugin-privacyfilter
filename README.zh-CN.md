@@ -111,11 +111,12 @@ plugins:
       enabled: true
       gitleaks_toml: ""        # 为空时使用内嵌规则（或共享库旁的 rules/gitleaks.toml）
       skip_models:
-        - gpt-4
+        - deepseek-*
       skip_formats:
         - openai
       skip_pii_types:
         - email
+      log_entities: false      # 把命中实体的原文写进日志
 ```
 
 插件字段说明：
@@ -123,13 +124,20 @@ plugins:
 | 字段              | 类型     | 默认值  | 说明                             |
 |-----------------|--------|------|--------------------------------|
 | `gitleaks_toml` | string | `""` | 自定义 gitleaks 规则文件路径，支持相对插件目录路径 |
-| `skip_models`   | array  | `[]` | 命中的模型不做脱敏                      |
+| `skip_models`   | array  | `[]` | 命中的上游模型不做脱敏，支持 `*` 通配                      |
 | `skip_formats`  | array  | `[]` | 命中的来源格式不做脱敏                    |
 | `skip_pii_types` | array | `[]` | 关闭指定结构化 PII 检测器，可选 `email` / `phone` / `id_card` / `ip` / `bank_card` |
+| `log_entities` | bool | `false` | 记录每个被脱敏实体的原文，排查误报用；注意下方警告 |
 
 当 `gitleaks_toml` 为空、且共享库旁不存在 `rules/gitleaks.toml` 时，插件使用构建时内嵌到二进制中的规则。
 
 `skip_pii_types` 单独关闭某个结构化 PII 检测器，不影响密钥层。可选值：`email`、`phone`、`id_card`、`ip`、`bank_card`；无法识别的取值会被忽略并打警告。gitleaks 规则文件管不到这一层，所以这是保留某类 PII 的唯一办法。
+
+`log_entities` 打开后每个命中实体打一行日志（`type=… text="…"`），用于确认过滤器到底抹掉了什么。CPA 的日志通常会落盘（docker `json-file` 驱动、request-log），所以开启等于把本要抹掉的密钥写进日志 —— 只在排查误报时临时打开，排查完关掉。
+
+`skip_models` 匹配的是**上游模型**（选完凭据后实际路由到的名字），所以客户端写的别名按它解析到的模型来匹配：`skip_models: ["deepseek-*"]` 会放过所有路由到 DeepSeek 模型的请求，哪怕客户端请求的是 `claude-sonnet-5`。`*` 是唯一通配符；不含通配符时要求全等（不区分大小写）。`RequestedModel` 同时参与匹配，所以直接写客户端别名也能生效。
+
+脱敏动作本身跑在 **after-auth** 拦截阶段：上游模型在选凭据之前不可知，过早脱敏会让「按上游模型跳过」失效。before-auth 阶段一律放行、不改请求体。
 
 ## 工作方式
 

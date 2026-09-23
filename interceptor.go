@@ -23,8 +23,13 @@ func (p *privacyFilterPlugin) Identifier() string {
 	return privacyFilterProvider
 }
 
+// InterceptRequestBeforeAuth intentionally does not redact. Whether a request
+// should be skipped depends on the upstream model, which is only known after
+// credential selection — rewriting the body here would make a skip_models
+// pattern like `deepseek-*` (an upstream name an alias resolves to) impossible
+// to honor. Redaction happens in InterceptRequestAfterAuth instead.
 func (p *privacyFilterPlugin) InterceptRequestBeforeAuth(ctx context.Context, req pluginapi.RequestInterceptRequest) (pluginapi.RequestInterceptResponse, error) {
-	return p.interceptRequest(req)
+	return pluginapi.RequestInterceptResponse{}, nil
 }
 
 func (p *privacyFilterPlugin) InterceptRequestAfterAuth(ctx context.Context, req pluginapi.RequestInterceptRequest) (pluginapi.RequestInterceptResponse, error) {
@@ -35,6 +40,8 @@ func (p *privacyFilterPlugin) interceptRequest(req pluginapi.RequestInterceptReq
 	resp := pluginapi.RequestInterceptResponse{}
 
 	if p.cfg.shouldSkip(req.Model, req.RequestedModel, req.SourceFormat) {
+		log.Infof("privacy filter: skipped redaction (upstream model=%q requested model=%q format=%q)",
+			req.Model, req.RequestedModel, req.SourceFormat)
 		return resp, nil
 	}
 
@@ -73,7 +80,7 @@ func (p *privacyFilterPlugin) redactRequestBody(body []byte) ([]byte, error) {
 
 	changed := false
 	if inputText, ok := items.(string); ok {
-		changed = p.editText(&inputText)
+		changed = p.editText(&inputText, field)
 		if changed {
 			payload[field] = inputText
 			log.Infof("privacy filter: redacted entities in %s (model=%s)", field, payload["model"])
@@ -108,7 +115,7 @@ func (p *privacyFilterPlugin) editContentItems(items []any, field string, model 
 		if !ok {
 			continue
 		}
-		if p.editContent(&content) {
+		if p.editContent(&content, fmt.Sprintf("%s[%d]", field, i)) {
 			itemMap["content"] = content
 			changed = true
 			log.Infof("privacy filter: redacted entities in %s[%d] (model=%s)", field, i, model)
@@ -117,11 +124,11 @@ func (p *privacyFilterPlugin) editContentItems(items []any, field string, model 
 	return changed
 }
 
-func (p *privacyFilterPlugin) editContent(content *any) bool {
+func (p *privacyFilterPlugin) editContent(content *any, where string) bool {
 	changed := false
 	switch v := (*content).(type) {
 	case string:
-		if p.editText(&v) {
+		if p.editText(&v, where) {
 			*content = v
 			changed = true
 		}
@@ -135,7 +142,7 @@ func (p *privacyFilterPlugin) editContent(content *any) bool {
 			if !ok {
 				continue
 			}
-			if p.editText(&text) {
+			if p.editText(&text, where) {
 				partMap["text"] = text
 				v[j] = partMap
 				changed = true
@@ -145,11 +152,18 @@ func (p *privacyFilterPlugin) editContent(content *any) bool {
 	return changed
 }
 
-func (p *privacyFilterPlugin) editText(text *string) bool {
+func (p *privacyFilterPlugin) editText(text *string, where string) bool {
 	result := p.filter.Redact(*text)
 	if !result.Hit {
 		return false
 	}
 	*text = result.Redacted
+	// 命中的原文默认不落日志：日志会持久化，写进去等于把要藏的密钥搬到日志里。
+	// 排查误报（比如把代码符号名当密钥）时临时打开 log_entities。
+	if p.cfg.LogEntities {
+		for _, entity := range result.Entities {
+			log.Infof("privacy filter: redacted entity type=%s text=%q (in %s)", entity.Type, entity.Text, where)
+		}
+	}
 	return true
 }

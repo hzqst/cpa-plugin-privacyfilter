@@ -4,7 +4,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-var pluginVersion = "0.4.0"
+var pluginVersion = "0.5.0"
 
 func buildPlugin(configYAML []byte, pluginDir string) (pluginapi.Plugin, error) {
 	cfg, errParse := parseConfig(configYAML)
@@ -41,7 +41,7 @@ func buildPlugin(configYAML []byte, pluginDir string) (pluginapi.Plugin, error) 
 				{
 					Name:        "skip_models",
 					Type:        pluginapi.ConfigFieldTypeArray,
-					Description: "Model names to skip redaction for.",
+					Description: "Upstream model names to skip redaction for; `*` wildcard supported (e.g. deepseek-*).",
 				},
 				{
 					Name:        "skip_formats",
@@ -52,6 +52,11 @@ func buildPlugin(configYAML []byte, pluginDir string) (pluginapi.Plugin, error) 
 					Name:        "skip_pii_types",
 					Type:        pluginapi.ConfigFieldTypeArray,
 					Description: "Structured PII detectors to disable: email, phone, id_card, ip, bank_card.",
+				},
+				{
+					Name:        "log_entities",
+					Type:        pluginapi.ConfigFieldTypeBoolean,
+					Description: "Log the original text of every redacted entity (leaks secrets into logs; enable only to debug false positives).",
 				},
 			},
 		},

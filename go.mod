@@ -12,4 +12,4 @@ require (
 
 require github.com/BurntSushi/toml v1.6.0 // indirect
 
-replace privacyfilter => github.com/hzqst/privacy-filter v0.0.0-20260922102813-3d4b27252c2f
+replace privacyfilter => github.com/hzqst/privacy-filter v0.0.0-20260923031939-8250f3291b51

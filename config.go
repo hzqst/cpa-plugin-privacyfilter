@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -20,6 +21,7 @@ type privacyFilterConfig struct {
 	SkipModels   []string `yaml:"skip_models"`
 	SkipFormats  []string `yaml:"skip_formats"`
 	SkipPIITypes []string `yaml:"skip_pii_types"`
+	LogEntities  bool     `yaml:"log_entities"`
 }
 
 func defaultConfig() privacyFilterConfig {
@@ -56,8 +58,8 @@ func (cfg *privacyFilterConfig) resolveGitleaksPath(pluginDir string) (path stri
 
 func (cfg *privacyFilterConfig) shouldSkip(model, requestedModel, format string) bool {
 	for _, m := range cfg.SkipModels {
-		trimmed := strings.TrimSpace(m)
-		if strings.EqualFold(trimmed, model) || strings.EqualFold(trimmed, requestedModel) {
+		pattern := strings.TrimSpace(m)
+		if matchModelName(pattern, model) || matchModelName(pattern, requestedModel) {
 			return true
 		}
 	}
@@ -67,6 +69,38 @@ func (cfg *privacyFilterConfig) shouldSkip(model, requestedModel, format string)
 		}
 	}
 	return false
+}
+
+// matchModelName matches a model name against a skip pattern. `*` is the only
+// wildcard (deepseek-*); a pattern without it must match the name exactly,
+// case-insensitively. The model name is the upstream model when credential
+// selection has already happened, so aliases are matched by their upstream name.
+func matchModelName(pattern, name string) bool {
+	name = strings.TrimSpace(name)
+	if pattern == "" || name == "" {
+		return false
+	}
+	if !strings.Contains(pattern, "*") {
+		return strings.EqualFold(pattern, name)
+	}
+	ok, err := path.Match(strings.ToLower(pattern), strings.ToLower(name))
+	return err == nil && ok
+}
+
+// invalidSkipModelPatterns returns wildcard patterns that cannot be parsed
+// (an unclosed `[`), so typos surface in the log instead of never matching.
+func invalidSkipModelPatterns(patterns []string) []string {
+	var bad []string
+	for _, p := range patterns {
+		pattern := strings.TrimSpace(p)
+		if pattern == "" || !strings.Contains(pattern, "*") {
+			continue
+		}
+		if _, err := path.Match(pattern, ""); err != nil {
+			bad = append(bad, pattern)
+		}
+	}
+	return bad
 }
 
 func newFilter(pluginDir string, cfg privacyFilterConfig) (*filter.Filter, error) {
@@ -104,6 +138,12 @@ func newFilter(pluginDir string, cfg privacyFilterConfig) (*filter.Filter, error
 	}
 	if len(cfg.SkipPIITypes) > 0 {
 		log.Infof("privacy filter: disabled PII detectors: %v", cfg.SkipPIITypes)
+	}
+	if bad := invalidSkipModelPatterns(cfg.SkipModels); len(bad) > 0 {
+		log.Warnf("privacy filter: invalid skip_models patterns ignored: %v", bad)
+	}
+	if len(cfg.SkipModels) > 0 {
+		log.Infof("privacy filter: skip_models patterns: %v", cfg.SkipModels)
 	}
 	rules, skipped := f.Stats()
 	log.Infof("privacy filter loaded: %d rules, %d skipped", rules, skipped)
