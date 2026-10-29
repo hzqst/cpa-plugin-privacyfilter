@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path"
@@ -9,7 +10,6 @@ import (
 
 	"privacyfilter/filter"
 
-	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
 
@@ -17,11 +17,84 @@ const privacyFilterProvider = "privacyfilter"
 const pluginName = "privacyfilter"
 
 type privacyFilterConfig struct {
-	GitleaksTOML string   `yaml:"gitleaks_toml"`
-	SkipModels   []string `yaml:"skip_models"`
-	SkipFormats  []string `yaml:"skip_formats"`
-	SkipPIITypes []string `yaml:"skip_pii_types"`
-	LogEntities  bool     `yaml:"log_entities"`
+	GitleaksTOML      string            `yaml:"gitleaks_toml"`
+	SkipModels        []string          `yaml:"skip_models"`
+	SkipFormats       []string          `yaml:"skip_formats"`
+	SkipPIITypes      []string          `yaml:"skip_pii_types"`
+	LogEntities       bool              `yaml:"log_entities"`
+	Replacement       string            `yaml:"replacement"`
+	ReplacementLabels map[string]string `yaml:"replacement_labels"`
+}
+
+// replacementLabel prevents YAML's string decoder from coercing booleans and
+// numbers into labels. A null field is left unset by the YAML decoder.
+type replacementLabel string
+
+func (label *replacementLabel) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode || node.Tag != "!!str" {
+		return fmt.Errorf("replacement label must be a string")
+	}
+	if strings.TrimSpace(node.Value) == "" {
+		return fmt.Errorf("replacement label must not be empty or whitespace-only")
+	}
+	*label = replacementLabel(node.Value)
+	return nil
+}
+
+type replacementLabels map[string]string
+
+func (labels *replacementLabels) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("replacement_labels must be a mapping")
+	}
+	if len(node.Content) == 0 {
+		return nil
+	}
+	values := make(map[string]string, len(node.Content)/2)
+	for i := 0; i < len(node.Content); i += 2 {
+		key, value := node.Content[i], node.Content[i+1]
+		if key.Kind != yaml.ScalarNode || key.Tag != "!!str" {
+			return fmt.Errorf("replacement_labels keys must be strings")
+		}
+		if key.Value == "" || strings.TrimSpace(key.Value) != key.Value {
+			return fmt.Errorf("replacement_labels key %q must be nonempty without edge whitespace", key.Value)
+		}
+		if _, exists := values[key.Value]; exists {
+			return fmt.Errorf("duplicate replacement_labels key %q", key.Value)
+		}
+		var label replacementLabel
+		if err := label.UnmarshalYAML(value); err != nil {
+			return fmt.Errorf("replacement_labels[%q]: %w", key.Value, err)
+		}
+		values[key.Value] = string(label)
+	}
+	*labels = values
+	return nil
+}
+
+func (cfg *privacyFilterConfig) UnmarshalYAML(node *yaml.Node) error {
+	var values struct {
+		GitleaksTOML      string            `yaml:"gitleaks_toml"`
+		SkipModels        []string          `yaml:"skip_models"`
+		SkipFormats       []string          `yaml:"skip_formats"`
+		SkipPIITypes      []string          `yaml:"skip_pii_types"`
+		LogEntities       bool              `yaml:"log_entities"`
+		Replacement       replacementLabel  `yaml:"replacement"`
+		ReplacementLabels replacementLabels `yaml:"replacement_labels"`
+	}
+	if err := node.Decode(&values); err != nil {
+		return err
+	}
+	*cfg = privacyFilterConfig{
+		GitleaksTOML:      values.GitleaksTOML,
+		SkipModels:        values.SkipModels,
+		SkipFormats:       values.SkipFormats,
+		SkipPIITypes:      values.SkipPIITypes,
+		LogEntities:       values.LogEntities,
+		Replacement:       string(values.Replacement),
+		ReplacementLabels: map[string]string(values.ReplacementLabels),
+	}
+	return nil
 }
 
 func defaultConfig() privacyFilterConfig {
@@ -129,24 +202,49 @@ func newFilter(pluginDir string, cfg privacyFilterConfig) (*filter.Filter, error
 		tomlPath = tmpPath
 	}
 
-	f, err := filter.NewWithOptions(tomlPath, filter.Options{DisabledPII: cfg.SkipPIITypes})
+	f, err := filter.New(tomlPath, filter.Config{
+		Replacement:       cfg.Replacement,
+		ReplacementLabels: cfg.ReplacementLabels,
+		DisabledPII:       cfg.SkipPIITypes,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create privacy filter: %w", err)
-	}
-	if unknown := unknownPIITypes(cfg.SkipPIITypes); len(unknown) > 0 {
-		log.Warnf("privacy filter: unknown skip_pii_types entries ignored: %v (supported: %v)", unknown, filter.PIITypes)
-	}
-	if len(cfg.SkipPIITypes) > 0 {
-		log.Infof("privacy filter: disabled PII detectors: %v", cfg.SkipPIITypes)
-	}
-	if bad := invalidSkipModelPatterns(cfg.SkipModels); len(bad) > 0 {
-		log.Warnf("privacy filter: invalid skip_models patterns ignored: %v", bad)
-	}
-	if len(cfg.SkipModels) > 0 {
-		log.Infof("privacy filter: skip_models patterns: %v", cfg.SkipModels)
+		var source string
+		switch {
+		case embedded:
+			source = "embedded rules"
+		case cfg.GitleaksTOML != "":
+			source = fmt.Sprintf("gitleaks_toml %q", tomlPath)
+		default:
+			source = fmt.Sprintf("sidecar rules file %q", tomlPath)
+		}
+		return nil, fmt.Errorf("failed to create privacy filter from %s: %w", source, err)
 	}
 	rules, skipped := f.Stats()
-	log.Infof("privacy filter loaded: %d rules, %d skipped", rules, skipped)
+	pluginLog(context.Background(), logLevelInfo, fmt.Sprintf("privacy filter loaded: %d rules, %d skipped", rules, skipped), map[string]any{
+		"rules":         rules,
+		"skipped_rules": skipped,
+	})
+	if unknown := unknownPIITypes(cfg.SkipPIITypes); len(unknown) > 0 {
+		pluginLog(context.Background(), logLevelWarn, fmt.Sprintf("privacy filter: unknown skip_pii_types entries ignored: %v (supported: %v)", unknown, filter.PIITypes), map[string]any{
+			"unknown_pii_types": unknown,
+			"supported":         filter.PIITypes,
+		})
+	}
+	if len(cfg.SkipPIITypes) > 0 {
+		pluginLog(context.Background(), logLevelInfo, fmt.Sprintf("privacy filter: disabled PII detectors: %v", cfg.SkipPIITypes), map[string]any{
+			"disabled_pii_types": cfg.SkipPIITypes,
+		})
+	}
+	if bad := invalidSkipModelPatterns(cfg.SkipModels); len(bad) > 0 {
+		pluginLog(context.Background(), logLevelWarn, fmt.Sprintf("privacy filter: invalid skip_models patterns ignored: %v", bad), map[string]any{
+			"invalid_skip_models": bad,
+		})
+	}
+	if len(cfg.SkipModels) > 0 {
+		pluginLog(context.Background(), logLevelInfo, fmt.Sprintf("privacy filter: skip_models patterns: %v", cfg.SkipModels), map[string]any{
+			"skip_models": cfg.SkipModels,
+		})
+	}
 	return f, nil
 }
 

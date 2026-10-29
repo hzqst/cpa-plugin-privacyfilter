@@ -26,7 +26,7 @@ CLIProxyAPI 的隐私过滤插件，用于在请求发送给模型前自动识�
 - 脱敏邮箱、手机号、密钥、连接串、证书等敏感内容
 - 使用内置 Gitleaks 规则 `rules/gitleaks.toml`
 - 支持自定义 Gitleaks 规则文件
-- 支持 OpenAI 风格的 `messages` 和 `input` 请求体
+- 支持 OpenAI Chat / Completions、OpenAI Responses、Claude、Gemini 和 Gemini CLI 请求体
 - 可按模型名或来源格式跳过过滤
 - 可构建为 Linux、macOS、Windows 原生共享库
 
@@ -139,16 +139,50 @@ plugins:
 
 脱敏动作本身跑在 **after-auth** 拦截阶段：上游模型在选凭据之前不可知，过早脱敏会让「按上游模型跳过」失效。before-auth 阶段一律放行、不改请求体。被跳过的请求只在 debug 级别记一行日志。
 
+### 配置错误
+
+- 启动时（`plugin.register`）配置无效会导致注册失败。CLIProxyAPI 会在日志中给出原因，插件不会启用，
+  可通过 `GET /v0/management/plugins` 确认 `effective_enabled: true`。
+- 热更新时（`plugin.reconfigure`）配置无效会被拒绝，插件**继续使用上一份有效配置脱敏**，不会因为一处笔误静默停止过滤。
+  宿主日志会输出类似 `privacy filter rejected new config, still using the previous valid config: ...` 的错误，并指出出错字段。
+  修正配置后再次保存即可生效。
+
+### 日志
+
+插件日志通过宿主的 `host.log` 回调输出，遵循 CLIProxyAPI 的日志级别、格式和输出位置，并带上请求 ID。
+每次拦截只要有脱敏就输出一行，列出被脱敏字段的 JSON 路径，例如 `privacy filter redacted 2 field(s): messages[0].content, system`。
+不会记录请求原文。
 ## 工作方式
 
-插件会在 before-auth 和 after-auth 请求拦截阶段运行，然后解析 JSON 请求体：
+插件只在 **after-auth** 请求拦截阶段脱敏。本 fork 刻意不在 before-auth 脱敏：是否跳过取决于上游模型，而它要等选完凭据才可知，
+过早改请求体就会让 `skip_models: ["deepseek-*"]` 这类按上游模型跳过的规则失效。after-auth 阶段仍排在更高优先级的插件之后，
+能覆盖它们加进来的文本。脱敏是幂等的，已经脱敏过的文本不会产生新的命中：
 
 1. 检查 `skip_models` 和 `skip_formats`，并跳过 `skip_pii_types` 里列出的检测器。
 2. 将请求体解析为 JSON。
-3. 优先处理 `messages`，没有时处理 `input`。
-4. 只修改文本字段。
+3. 处理所有支持的提示词字段（见下表）。
+4. 只修改自由文本。
 5. 检测到敏感内容后，用占位符替换原文。
 6. 解析失败或未命中可处理字段时，请求保持不变。
+
+各客户端格式的脱敏字段：
+
+| 格式                 | 字段                                                                                  |
+|--------------------|-------------------------------------------------------------------------------------|
+| OpenAI Chat        | `messages[].content`（字符串或 `text` 分段）                                               |
+| OpenAI 图片 / 视频      | 图片和视频生成请求的 `prompt`（字符串或字符串数组）                                                    |
+| OpenAI Responses   | `instructions`、`input`（字符串）、`input[].content`、`function_call_output` 的 `output`     |
+| Claude             | `system`、`messages[].content` 文本块、`tool_result` 内容                                   |
+| Gemini             | `systemInstruction` / `system_instruction` 和 `contents[].parts[].text`               |
+| Gemini CLI         | 顶层 `request` 对象内的上述 Gemini 字段                                                       |
+
+以下内容有意不修改：工具调用参数（`function_call.arguments`、Claude `tool_use.input`、Gemini `functionCall` /
+`functionResponse`）、图片、文件、Claude `thinking` 块，以及标记了 `thought: true` 的 Gemini 分段（其文本与
+`thoughtSignature` 绑定，修改后上游会拒绝请求）。
+
+OpenAI Completions 请求通过 `messages` 覆盖：宿主在调用拦截器之前会先把它转成 chat completions 格式。
+
+`skip_formats` 的常见取值是宿主的来源格式名，例如 `openai`、`openai-response`、`claude`、`gemini`、`gemini-cli`、`openai-image`、`openai-video`。
 
 支持的请求体示例：
 
@@ -227,7 +261,7 @@ rules/gitleaks.toml     内置检测规则
 依赖说明：
 
 ```text
-privacyfilter => github.com/packyme/privacy-filter
+privacyfilter => github.com/rheodev/privacy-filter
 ```
 
 ## 来源
